@@ -1,0 +1,114 @@
+name: PWA Unified Build and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      pwa_url:
+        description: 'https://ss752723.stars.ne.jp/app19/'
+        required: true
+        default: 'https://'
+
+jobs:
+  # ==========================================
+  # 1. Android (AAB生成 ＆ Google Play自動アップロード)
+  # ==========================================
+  build-and-deploy-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js & Bubblewrap CLI
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: npm install -g @bubblewrap/cli
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Generate and Build Android App (AAB)
+        run: |
+          echo "Target URL: ${{ github.event.inputs.pwa_url }}"
+          # BubblewrapでURLからAndroidプロジェクトを非対話初期化してビルド
+          bubblewrap init --manifest "${{ github.event.inputs.pwa_url }}/manifest.json" --directory android-project --skip
+          cd android-project
+          bubblewrap build
+
+      - name: Set up Ruby & Fastlane for Google Play
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+          bundler-cache: true
+      - run: gem install fastlane
+
+      - name: Upload to Google Play Store
+        env:
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.PLAY_STORE_JSON_KEY }}
+        run: |
+          echo "$GOOGLE_PLAY_JSON_KEY_DATA" > google_key.json
+          # ビルドされたAABファイルを自動検知してアップロード
+          AAB_PATH=$(find android-project -name "*.aab" | head -n 1)
+          
+          fastlane run upload_to_play_store \
+            json_key:"google_key.json" \
+            aab:"$AAB_PATH" \
+            track:"internal"
+
+  # ==========================================
+  # 2. Windows (MSIX生成 ＆ Microsoft Store自動アップロード)
+  # ==========================================
+  build-and-deploy-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Windows Package
+        run: |
+          echo "Building Windows app for ${{ github.event.inputs.pwa_url }}"
+          # ※Windows向けのPWABuilder CLI等を用いたビルドコマンドをここに記述
+          # 例としてダミーのMSIX生成ステップ
+          echo "Generated MSIX package."
+
+      - name: Publish to Microsoft Store
+        uses: microsoft/store-submission@v1
+        with:
+          product-id: ${{ secrets.MS_APP_ID }}
+          tenant-id: ${{ secrets.MS_TENANT_ID }}
+          client-id: ${{ secrets.MS_CLIENT_ID }}
+          client-secret: ${{ secrets.MS_CLIENT_SECRET }}
+          package-path: 'path/to/your-app.msix' # 実際の成果物パスに変更
+
+  # ==========================================
+  # 3. iOS / iPhone (TestFlight自動アップロード)
+  # ==========================================
+  build-and-deploy-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode & Build iOS Wrapper
+        run: |
+          echo "Building iOS app for ${{ github.event.inputs.pwa_url }}"
+          # ※CapacitorやXcodebuildを用いたビルド・アーカイブ処理をここに記述
+
+      - name: Set up Ruby & Fastlane
+        run: gem install fastlane
+
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_CONTENT: ${{ secrets.ASC_API_KEY_CONTENT }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys/
+          echo "$ASC_API_KEY_CONTENT" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+          
+          fastlane run upload_to_testflight \
+            ipa:"path/to/your-app.ipa" \
+            api_key_path:"~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
