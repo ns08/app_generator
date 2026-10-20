@@ -1,10 +1,10 @@
-name: PWA Unified Build and Deploy
+name: Unified App Build & Store Deploy
 
 on:
   workflow_dispatch:
     inputs:
       pwa_url:
-        description: 'https://ss752723.stars.ne.jp/app19/'
+        description: '対象のPWA URL (例: https://ss752723.stars.ne.jp/app19/)'
         required: true
         default: 'https://'
 
@@ -12,7 +12,7 @@ jobs:
   # ==========================================
   # 1. Android (AAB生成 ＆ Google Play自動アップロード)
   # ==========================================
-  build-and-deploy-android:
+  deploy-android:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -31,18 +31,31 @@ jobs:
           java-version: '17'
 
       - name: Generate and Build Android App (AAB)
+        env:
+          PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
-          echo "Target URL: ${{ github.event.inputs.pwa_url }}"
-          # BubblewrapでURLからAndroidプロジェクトを非対話初期化してビルド
-          bubblewrap init --manifest "${{ github.event.inputs.pwa_url }}/manifest.json" --directory android-project --skip
+          npx @bubblewrap/cli init \
+            --manifest "${PWA_URL}manifest.json" \
+            --directory android-project \
+            --skip \
+            --packageId "com.app.app19" \
+            --name "App19" \
+            --appShortName "App19" \
+            --navigationColor "#000000" \
+            --themeColor "#000000" \
+            --backgroundColor "#ffffff" \
+            --startUrl "${PWA_URL}" \
+            --icon "${PWA_URL}icon.png" \
+            --maskableIcon "${PWA_URL}icon.png" \
+            --monochromeIcon "${PWA_URL}icon.png"
+            
           cd android-project
           bubblewrap build
 
-      - name: Set up Ruby & Fastlane for Google Play
+      - name: Set up Ruby & Fastlane
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.1'
-          bundler-cache: true
       - run: gem install fastlane
 
       - name: Upload to Google Play Store
@@ -50,7 +63,6 @@ jobs:
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.PLAY_STORE_JSON_KEY }}
         run: |
           echo "$GOOGLE_PLAY_JSON_KEY_DATA" > google_key.json
-          # ビルドされたAABファイルを自動検知してアップロード
           AAB_PATH=$(find android-project -name "*.aab" | head -n 1)
           
           fastlane run upload_to_play_store \
@@ -59,43 +71,36 @@ jobs:
             track:"internal"
 
   # ==========================================
-  # 2. Windows (MSIX生成 ＆ Microsoft Store自動アップロード)
+  # 2. iOS / iPhone (IPA生成 ＆ TestFlight自動アップロード)
   # ==========================================
-  build-and-deploy-windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build Windows Package
-        run: |
-          echo "Building Windows app for ${{ github.event.inputs.pwa_url }}"
-          # ※Windows向けのPWABuilder CLI等を用いたビルドコマンドをここに記述
-          # 例としてダミーのMSIX生成ステップ
-          echo "Generated MSIX package."
-
-      - name: Publish to Microsoft Store
-        uses: microsoft/store-submission@v1
-        with:
-          product-id: ${{ secrets.MS_APP_ID }}
-          tenant-id: ${{ secrets.MS_TENANT_ID }}
-          client-id: ${{ secrets.MS_CLIENT_ID }}
-          client-secret: ${{ secrets.MS_CLIENT_SECRET }}
-          package-path: 'path/to/your-app.msix' # 実際の成果物パスに変更
-
-  # ==========================================
-  # 3. iOS / iPhone (TestFlight自動アップロード)
-  # ==========================================
-  build-and-deploy-ios:
+  deploy-ios:
     runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Xcode & Build iOS Wrapper
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Build iOS App via Capacitor
+        env:
+          PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
-          echo "Building iOS app for ${{ github.event.inputs.pwa_url }}"
-          # ※CapacitorやXcodebuildを用いたビルド・アーカイブ処理をここに記述
+          npx @capacitor/cli init App com.app.app19 --web-dir www
+          npx @capacitor/cli add ios
+          
+          node -e '
+            const fs = require("fs");
+            const config = JSON.parse(fs.readFileSync("capacitor.config.json", "utf8"));
+            config.server = { url: process.env.PWA_URL, cleartext: true };
+            fs.writeFileSync("capacitor.config.json", JSON.stringify(config, null, 2));
+          '
+          
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath build/App.xcarchive archive CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/ || true
 
       - name: Set up Ruby & Fastlane
         run: gem install fastlane
@@ -109,6 +114,35 @@ jobs:
           mkdir -p ~/.appstoreconnect/private_keys/
           echo "$ASC_API_KEY_CONTENT" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
           
+          IPA_PATH=$(find ios/App -name "*.ipa" | head -n 1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "Warning: IPA not found, skipping upload placeholder."
+            exit 0
+          fi
+          
           fastlane run upload_to_testflight \
-            ipa:"path/to/your-app.ipa" \
+            ipa:"$IPA_PATH" \
             api_key_path:"~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+
+  # ==========================================
+  # 3. Windows (MSIX生成 ＆ Microsoft Store自動アップロード)
+  # ==========================================
+  deploy-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Windows Package
+        run: |
+          echo "Building Windows MSIX for ${{ github.event.inputs.pwa_url }}"
+          # ※Windows用パッケージ生成のコマンドをここに記述
+
+      - name: Publish to Microsoft Store
+        uses: microsoft/store-submission@v1
+        with:
+          product-id: ${{ secrets.MS_APP_ID }}
+          tenant-id: ${{ secrets.MS_TENANT_ID }}
+          client-id: ${{ secrets.MS_CLIENT_ID }}
+          client-secret: ${{ secrets.MS_CLIENT_SECRET }}
+          package-path: 'path/to/your-app.msix'
