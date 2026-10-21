@@ -29,25 +29,30 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Generate Android App via PWABuilder
+      - name: Generate Android App via Bubblewrap
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-android
-          # 対話プロンプトを防ぐためPWABuilderのCLI / APIフォールバックを使用
-          npx @pwabuilder/cli generate android \
-            --url "${PWA_URL}" \
-            --name "App19" \
+          npm install -g @bubblewrap/cli
+          
+          # Bubblewrapの初期化（--skip で対話項目をスキップし、環境変数または自動応答させる）
+          bubblewrap init \
+            --manifest "${PWA_URL}manifest.json" \
+            --directory pwabuilder-android \
+            --skip \
             --packageId "com.app.app19" \
-            --output pwabuilder-android || \
-          {
-            echo "Fallback: Downloading via PWABuilder API..."
-            curl -X POST "https://pwabuilder-image-generator.azurewebsites.net/api/android" \
-              -H "Content-Type: application/json" \
-              -d "{\"url\": \"${PWA_URL}\", \"packageId\": \"com.app.app19\", \"name\": \"App19\"}" \
-              --output android-package.zip
-            unzip -o android-package.zip -d pwabuilder-android
-          }
+            --name "App19" \
+            --appShortName "App19" \
+            --defaultLanguage "ja" \
+            --navigationColor "#000000" \
+            --themeColor "#000000" \
+            --backgroundColor "#ffffff" \
+            --startUrl "${PWA_URL}" \
+            --icon "${PWA_URL}icon.png" || true
+            
+          cd pwabuilder-android
+          bubblewrap build
 
       - name: Set up Ruby & Fastlane
         uses: ruby/setup-ruby@v1
@@ -63,7 +68,7 @@ jobs:
           AAB_PATH=$(find pwabuilder-android -name "*.aab" | head -n 1)
           
           if [ -z "$AAB_PATH" ]; then
-            echo "Error: AAB file not found in PWABuilder output."
+            echo "Error: AAB file not found."
             exit 1
           fi
           
@@ -89,12 +94,13 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Generate iOS Wrapper via PWABuilder
+      - name: Generate iOS Wrapper
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-ios
-          npx @pwabuilder/cli generate ios --url "$PWA_URL" --directory pwabuilder-ios || true
+          # iOS向けに Capacitor を使ったラッパー生成を行う例
+          npx @capacitor/cli init App com.app.app19 --web-dir www || true
 
       - name: Set up Ruby & Fastlane
         run: gem install fastlane
@@ -108,9 +114,9 @@ jobs:
           mkdir -p ~/.appstoreconnect/private_keys/
           echo "$ASC_API_KEY_CONTENT" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
           
-          IPA_PATH=$(find pwabuilder-ios -name "*.ipa" | head -n 1)
+          IPA_PATH=$(find . -name "*.ipa" | head -n 1)
           if [ -z "$IPA_PATH" ]; then
-            echo "Notice: IPA file not found. Skipping TestFlight upload placeholder."
+            echo "Notice: IPA file not found. Skipping TestFlight upload."
             exit 0
           fi
           
