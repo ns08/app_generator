@@ -1,4 +1,4 @@
-name: PWABuilder & Unified Store Deploy
+name: PWABuilder & Strict Unified Store Deploy
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   # ==========================================
-  # 1. Android (Google Play)
+  # 1. Android (Google Play Store)
   # ==========================================
   deploy-android:
     runs-on: ubuntu-latest
@@ -36,8 +36,8 @@ jobs:
           mkdir -p pwabuilder-android
           npm install -g @bubblewrap/cli
           
-          # 対話プロンプトに対して "y"（JDK自動インストール等）を自動応答させて非対話実行
-          echo -e "y" | bubblewrap init \
+          # yes コマンドを使って、JDKやAndroid SDKの自動インストール確認等のすべての対話プロンプトを自動突破
+          yes | bubblewrap init \
             --manifest "${PWA_URL}manifest.json" \
             --directory pwabuilder-android \
             --skip \
@@ -49,7 +49,7 @@ jobs:
             --themeColor "#000000" \
             --backgroundColor "#ffffff" \
             --startUrl "${PWA_URL}" \
-            --icon "${PWA_URL}icon.png" || true
+            --icon "${PWA_URL}icon.png"
             
           cd pwabuilder-android
           bubblewrap build
@@ -68,7 +68,7 @@ jobs:
           AAB_PATH=$(find pwabuilder-android -name "*.aab" | head -n 1)
           
           if [ -z "$AAB_PATH" ]; then
-            echo "Error: AAB file not found."
+            echo "Error: AAB file could not be found. Build may have failed."
             exit 1
           fi
           
@@ -81,7 +81,7 @@ jobs:
             skip_upload_screenshots:true
 
   # ==========================================
-  # 2. iOS / iPhone (TestFlight)
+  # 2. iOS / iPhone (App Store Connect / TestFlight)
   # ==========================================
   deploy-ios:
     runs-on: macos-latest
@@ -94,12 +94,16 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Generate iOS Wrapper
+      - name: Generate iOS Wrapper via Capacitor
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-ios
-          npx @capacitor/cli init App com.app.app19 --web-dir www || true
+          cd pwabuilder-ios
+          npm init -y
+          npm install @capacitor/cli @capacitor/core
+          npx cap init App com.app.app19 --web-dir .
+          npx cap add ios
 
       - name: Set up Ruby & Fastlane
         run: gem install fastlane
@@ -115,8 +119,8 @@ jobs:
           
           IPA_PATH=$(find . -name "*.ipa" | head -n 1)
           if [ -z "$IPA_PATH" ]; then
-            echo "Notice: IPA file not found. Skipping TestFlight upload."
-            exit 0
+            echo "Error: IPA file not found for TestFlight upload."
+            exit 1
           fi
           
           fastlane run upload_to_testflight \
@@ -132,11 +136,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate Windows Package
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Generate Windows MSIX Package via PWABuilder CLI
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
-          echo "Generating Windows package for: ${{ github.event.inputs.pwa_url }}"
+          npm install -g @pwabuilder/pwabuilder-cli
+          pwabuilder package --url "${PWA_URL}" --platform windows --name "App19" --packageId "com.app.app19" --identity "App19" --output windows-output
 
       - name: Publish to Microsoft Store
         uses: microsoft/store-submission@v1
@@ -145,4 +155,4 @@ jobs:
           tenant-id: ${{ secrets.MS_TENANT_ID }}
           client-id: ${{ secrets.MS_CLIENT_ID }}
           client-secret: ${{ secrets.MS_CLIENT_SECRET }}
-          package-path: 'path/to/your-app.msix'
+          package-path: 'windows-output/*.msix'
