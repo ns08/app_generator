@@ -1,4 +1,4 @@
-name: PWABuilder & Unified Store Deploy with Metadata
+name: PWABuilder & Unified Store Deploy
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       pwa_url:
         description: '対象のPWA URL (例: https://ss752723.stars.ne.jp/app19/)'
         required: true
-        default: 'https://'
+        default: 'https://ss752723.stars.ne.jp/app19/'
 
 jobs:
   # ==========================================
@@ -29,13 +29,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Generate Android App with Metadata & Defaults
+      - name: Generate Android App via Bubblewrap
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-android
-          
-          # 【設定情報】パッケージ名、アプリ名、デフォルト言語(日本語: ja)、カテゴリ(アプリ/ゲーム等)を反映
+          # 非対話環境でのプロンプト停止を防ぐため < /dev/null を付与
           npx @bubblewrap/cli init \
             --manifest "${PWA_URL}manifest.json" \
             --directory pwabuilder-android \
@@ -48,7 +47,7 @@ jobs:
             --themeColor "#000000" \
             --backgroundColor "#ffffff" \
             --startUrl "${PWA_URL}" \
-            --icon "${PWA_URL}icon.png"
+            --icon "${PWA_URL}icon.png" < /dev/null
             
           cd pwabuilder-android
           bubblewrap build
@@ -59,14 +58,13 @@ jobs:
           ruby-version: '3.1'
       - run: gem install fastlane
 
-      - name: Upload to Google Play Store (with Content/Policy Declarations)
+      - name: Upload to Google Play Store
         env:
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.PLAY_STORE_JSON_KEY }}
         run: |
           echo "$GOOGLE_PLAY_JSON_KEY_DATA" > google_key.json
           AAB_PATH=$(find pwabuilder-android -name "*.aab" | head -n 1)
           
-          # fastlane supply を用いて、パッケージ名、言語、各種申告情報（コンテンツレーティング等）を自動反映してアップロード
           fastlane run upload_to_play_store \
             json_key:"google_key.json" \
             package_name:"com.app.app19" \
@@ -76,7 +74,7 @@ jobs:
             skip_upload_screenshots:true
 
   # ==========================================
-  # 2. iOS / iPhone (TestFlight / App Store Connect)
+  # 2. iOS / iPhone (TestFlight)
   # ==========================================
   deploy-ios:
     runs-on: macos-latest
@@ -89,20 +87,17 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Setup iOS Bundle ID & Primary Language
+      - name: Generate iOS Wrapper via PWABuilder
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-ios
           npx @pwabuilder/cli generate ios --url "$PWA_URL" --directory pwabuilder-ios || true
-          
-          # 【設定情報】バンドルIDやプライマリ言語（日本語: ja）をプロジェクト設定に自動書き込み
-          echo "Configuring iOS Bundle ID: com.app.app19 and Primary Language: ja"
 
       - name: Set up Ruby & Fastlane
         run: gem install fastlane
 
-      - name: Upload to TestFlight (with SKU & App Name)
+      - name: Upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -113,11 +108,10 @@ jobs:
           
           IPA_PATH=$(find pwabuilder-ios -name "*.ipa" | head -n 1)
           if [ -z "$IPA_PATH" ]; then
-            echo "Notice: IPA file requires manual signing config. Skipping upload."
+            echo "Notice: IPA file not found. Skipping TestFlight upload placeholder."
             exit 0
           fi
           
-          # 【設定情報】SKU（例: APP19_SKU）やストア名（App Name）を指定してアップロード
           fastlane run upload_to_testflight \
             ipa:"$IPA_PATH" \
             api_key_path:"~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
@@ -131,12 +125,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate Windows Package with App Name
+      - name: Generate Windows Package
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
-          echo "Generating Windows MSIX package for: $PWA_URL with App Name: App19"
-          # ※Windows用パッケージ生成のコマンド
+          echo "Generating Windows package for: ${{ github.event.inputs.pwa_url }}"
 
       - name: Publish to Microsoft Store
         uses: microsoft/store-submission@v1
