@@ -36,8 +36,8 @@ jobs:
           mkdir -p pwabuilder-android
           npm install -g @bubblewrap/cli
           
-          # echo "n" をパイプで流し込んで「JDKを自動インストールするか？」の質問に自動でNoと答えて対話抜けする
-          echo "n" | bubblewrap init \
+          # 対話プロンプトに対して "y"（JDK自動インストール等）を自動応答させて非対話実行
+          echo -e "y" | bubblewrap init \
             --manifest "${PWA_URL}manifest.json" \
             --directory pwabuilder-android \
             --skip \
@@ -53,6 +53,33 @@ jobs:
             
           cd pwabuilder-android
           bubblewrap build
+
+      - name: Set up Ruby & Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+      - run: gem install fastlane
+
+      - name: Upload to Google Play Store
+        env:
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.PLAY_STORE_JSON_KEY }}
+        run: |
+          echo "$GOOGLE_PLAY_JSON_KEY_DATA" > google_key.json
+          AAB_PATH=$(find pwabuilder-android -name "*.aab" | head -n 1)
+          
+          if [ -z "$AAB_PATH" ]; then
+            echo "Error: AAB file not found."
+            exit 1
+          fi
+          
+          fastlane run upload_to_play_store \
+            json_key:"google_key.json" \
+            package_name:"com.app.app19" \
+            aab:"$AAB_PATH" \
+            track:"internal" \
+            skip_upload_images:true \
+            skip_upload_screenshots:true
+
   # ==========================================
   # 2. iOS / iPhone (TestFlight)
   # ==========================================
@@ -72,7 +99,6 @@ jobs:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-ios
-          # iOS向けに Capacitor を使ったラッパー生成を行う例
           npx @capacitor/cli init App com.app.app19 --web-dir www || true
 
       - name: Set up Ruby & Fastlane
