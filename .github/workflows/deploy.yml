@@ -29,28 +29,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Generate Android App via Bubblewrap
+      - name: Generate Android App via PWABuilder
         env:
           PWA_URL: ${{ github.event.inputs.pwa_url }}
         run: |
           mkdir -p pwabuilder-android
-          # 非対話環境でのプロンプト停止を防ぐため < /dev/null を付与
-          npx @bubblewrap/cli init \
-            --manifest "${PWA_URL}manifest.json" \
-            --directory pwabuilder-android \
-            --skip \
-            --packageId "com.app.app19" \
+          # 対話プロンプトを防ぐためPWABuilderのCLI / APIフォールバックを使用
+          npx @pwabuilder/cli generate android \
+            --url "${PWA_URL}" \
             --name "App19" \
-            --appShortName "App19" \
-            --defaultLanguage "ja" \
-            --navigationColor "#000000" \
-            --themeColor "#000000" \
-            --backgroundColor "#ffffff" \
-            --startUrl "${PWA_URL}" \
-            --icon "${PWA_URL}icon.png" < /dev/null
-            
-          cd pwabuilder-android
-          bubblewrap build
+            --packageId "com.app.app19" \
+            --output pwabuilder-android || \
+          {
+            echo "Fallback: Downloading via PWABuilder API..."
+            curl -X POST "https://pwabuilder-image-generator.azurewebsites.net/api/android" \
+              -H "Content-Type: application/json" \
+              -d "{\"url\": \"${PWA_URL}\", \"packageId\": \"com.app.app19\", \"name\": \"App19\"}" \
+              --output android-package.zip
+            unzip -o android-package.zip -d pwabuilder-android
+          }
 
       - name: Set up Ruby & Fastlane
         uses: ruby/setup-ruby@v1
@@ -64,6 +61,11 @@ jobs:
         run: |
           echo "$GOOGLE_PLAY_JSON_KEY_DATA" > google_key.json
           AAB_PATH=$(find pwabuilder-android -name "*.aab" | head -n 1)
+          
+          if [ -z "$AAB_PATH" ]; then
+            echo "Error: AAB file not found in PWABuilder output."
+            exit 1
+          fi
           
           fastlane run upload_to_play_store \
             json_key:"google_key.json" \
